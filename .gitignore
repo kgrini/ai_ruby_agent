@@ -1,0 +1,13 @@
+# .gitignore
+
+# Секреты и ключи
+.env
+*.env
+
+# Системные файлы и логи
+*.log
+.DS_Store
+
+# Gemfile lock / кастомные сборки (по желанию)
+/vendor/bundle
+.idea/
