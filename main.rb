@@ -1,24 +1,21 @@
 # main.rb
 require_relative 'app/models/order'
 require_relative 'app/models/user'
+require_relative 'app/models/conversation'
 require_relative 'app/services/ai/agent_runner'
 
-# Подготовка тестовых данных
+# Seed domain data
 order1 = Order.new(id: 101, user_id: 1, status: "shipped", total_price: 150)
 order2 = Order.new(id: 102, user_id: 1, status: "processing", total_price: 80)
+user = User.new(id: 1, name: "Ivan", orders: [order1, order2])
 
-# Пользователь Иван имеет доступ ТОЛЬКО к заказам #101 и #102
-user = User.new(id: 1, name: "Иван", orders: [order1, order2])
+# Initialize persistent conversation session for user
+conversation = Conversation.new(id: 1001, user: user)
+agent = Ai::AgentRunner.new(conversation: conversation)
 
-# Создаем агента для Ивана
-agent = Ai::AgentRunner.new(current_user: user)
+puts "=== Step 1: Querying order status ==="
+puts agent.call("What is the status of my order #102?")
 
-puts "=== ТЕСТ 1: Проверка и отмена своего заказа ==="
-prompt1 = "Проверь статус заказа 102. Если он обрабатывается, отмени его."
-puts "\nИтоговый ответ Агента:\n#{agent.call(prompt1)}"
-
-puts "\n" + "="*50 + "\n"
-
-puts "=== ТЕСТ 2: Попытка доступа к ЧУЖОМУ заказу #999 ==="
-prompt2 = "Отмени заказ #999"
-puts "\nИтоговый ответ Агента:\n#{agent.call(prompt2)}"
+puts "\n=== Step 2: Contextual action request without repeating order ID ==="
+# Notice we don't mention order #102 explicitly! The agent remembers it from session history.
+puts agent.call("Please cancel it.")

@@ -8,48 +8,58 @@ module Ai
   class AgentRunner
     MAX_STEPS = 5
 
-    def initialize(current_user:, api_key: ENV['OPENAI_API_KEY'])
-      @current_user = current_user
+    def initialize(conversation:, api_key: ENV['OPENAI_API_KEY'])
+      @conversation = conversation
+      @current_user = conversation.user
       @api_key = api_key
       @uri = URI('https://api.openai.com/v1/chat/completions')
     end
 
+    # Executes the ReAct loop maintaining full conversation history
     def call(user_prompt)
-      messages = [
-        {
-          role: "system",
-          content: "Ты — ассистент поддержки. Клиент: #{current_user.name}. Используй доступные инструменты для решения задач."
-        },
-        { role: "user", content: user_prompt }
-      ]
+      # Save incoming user input into conversation memory
+      conversation.add_message(role: 'user', content: user_prompt)
 
       step = 0
 
       loop do
         step += 1
-        return "Превышен лимит итераций цикла." if step > MAX_STEPS
+        return "Limit of maximum step iterations reached." if step > MAX_STEPS
 
-        puts "\n[Итерация #{step}] Запрос к LLM..."
-        response = request_llm(messages)
+        # Build full payload with system context and history
+        payload_messages = build_payload_messages
+        response = request_llm(payload_messages)
 
         assistant_message = response.dig("choices", 0, "message")
-        messages << assistant_message
-
         finish_reason = response.dig("choices", 0, "finish_reason")
 
         if finish_reason == "tool_calls"
-          process_tools(assistant_message["tool_calls"], messages)
+          process_tools(assistant_message["tool_calls"])
         elsif finish_reason == "stop"
-          return assistant_message["content"]
+          # Persist final assistant output in conversation state
+          final_content = assistant_message["content"]
+          conversation.add_message(role: 'assistant', content: final_content)
+          return final_content
         end
       end
     end
 
     private
 
-    attr_reader :current_user, :api_key, :uri
+    attr_reader :conversation, :current_user, :api_key, :uri
 
-    def process_tools(tool_calls, messages)
+    # Constructs array of messages including system prompt and persistent history
+    def build_payload_messages
+      system_prompt = {
+        role: "system",
+        content: "You are a customer support assistant. Client name: #{current_user.name}."
+      }
+
+      [system_prompt] + conversation.history_for_llm
+    end
+
+    # Processes function execution requested by the LLM
+    def process_tools(tool_calls)
       tool_calls.each do |tool_call|
         call_id = tool_call["id"]
         fn_name = tool_call.dig("function", "name")
@@ -57,24 +67,22 @@ module Ai
 
         params = JSON.parse(raw_args, symbolize_names: true) rescue {}
 
-        puts "🤖 AI вызывает инструмент: #{fn_name}(#{params})"
-
         result = ToolRegistry.execute(
           name: fn_name,
           current_user: current_user,
           params: params
         )
 
-        puts "  └─ Результат инструмента: #{result}"
-
-        messages << {
-          role: "tool",
-          tool_call_id: call_id,
-          content: result
-        }
+        # Save tool response into history with corresponding tool_call_id
+        conversation.add_message(
+          role: 'tool',
+          content: result,
+          tool_call_id: call_id
+        )
       end
     end
 
+    # Performs HTTP POST payload delivery to OpenAI completion endpoint
     def request_llm(messages)
       req = Net::HTTP::Post.new(uri, {
         'Content-Type' => 'application/json',
